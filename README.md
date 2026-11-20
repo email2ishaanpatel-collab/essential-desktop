@@ -18,6 +18,10 @@ The build writes the application to `dist` by default. To build directly into an
 
 Open the gear in the search bar. The back chevron returns to the launcher. Choose a theme, shortcut, enabled features, and Whisper model. Tiny English is the default. Base English uses a larger model. The picker also accepts a local whisper.cpp GGML model file. Dictation transcribes English and runs on the CPU.
 
+Choose the voice pill size and position in Settings. Whisper loads the selected model as you record and releases it after each dictation.
+
+Start with “Note” or “Notes” to save to Notes. Start with “Task” or “Tasks” to add an open to-do. Say just the command and hold the shortcut again within 30 seconds to supply its text. Escape cancels a pending command. Other speech is inserted into the focused field.
+
 The dictation pill shows five recent microphone levels while recording, a moving bar during transcription, and a brief sign-off when text is inserted. It shows a dotted cross when dictation fails.
 
 Settings, notes, tasks, and clipboard history live in the current user's roaming SuperDeck folder. The voice engine and bundled models live in the voice folder beside the executable.

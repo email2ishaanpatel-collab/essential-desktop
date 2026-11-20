@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Collections.Generic;
@@ -45,7 +46,7 @@ public sealed class Microphone : IDisposable {
     public byte[] Finish() { Stop(); lock(gate) return pcm.ToArray(); }
     void Stop() { if(handle==IntPtr.Zero) return; stopping=true; waveInReset(handle); foreach(var p in buffers) { waveInUnprepareHeader(handle,p,Size); var h=(Header)Marshal.PtrToStructure(p,typeof(Header)); Marshal.FreeHGlobal(h.data); Marshal.FreeHGlobal(p); } buffers.Clear(); waveInClose(handle); handle=IntPtr.Zero; }
     public void Dispose() { Stop(); pcm.Dispose(); }
-    public static void SaveWave(string path,byte[] data) { using(var w=new BinaryWriter(File.Create(path))) { w.Write(Encoding.ASCII.GetBytes("RIFF")); w.Write(36+data.Length); w.Write(Encoding.ASCII.GetBytes("WAVEfmt ")); w.Write(16); w.Write((short)1); w.Write((short)1); w.Write(16000); w.Write(32000); w.Write((short)2); w.Write((short)16); w.Write(Encoding.ASCII.GetBytes("data")); w.Write(data.Length); w.Write(data); } }
+    public static void WriteWave(Stream stream,byte[] data) { using(var w=new BinaryWriter(stream)) { w.Write(Encoding.ASCII.GetBytes("RIFF")); w.Write(36+data.Length); w.Write(Encoding.ASCII.GetBytes("WAVEfmt ")); w.Write(16); w.Write((short)1); w.Write((short)1); w.Write(16000); w.Write(32000); w.Write((short)2); w.Write((short)16); w.Write(Encoding.ASCII.GetBytes("data")); w.Write(data.Length); w.Write(data); } }
 }
 public sealed class VoicePill : Window {
     readonly Canvas art=new Canvas(); readonly List<System.Windows.Shapes.Rectangle> bars=new List<System.Windows.Shapes.Rectangle>();
@@ -65,12 +66,12 @@ public sealed class VoicePill : Window {
     public bool Thinking;
     bool animated;
     int sequence;
-    double anchor;
+    double anchor, offset;
 
 
     public VoicePill() {
         Width=76;Height=54;WindowStyle=WindowStyle.None;AllowsTransparency=true;Background=Brushes.Transparent;ShowInTaskbar=false;ShowActivated=false;Topmost=true;ResizeMode=ResizeMode.NoResize;
-        var card=new Border { CornerRadius=new CornerRadius(27),Background=new SolidColorBrush(Color.FromRgb(255,217,0)),Child=art }; Content=card;
+        var card=new Border { CornerRadius=new CornerRadius(27),Background=new SolidColorBrush(Color.FromRgb(255,217,0)),Width=76, Height=54, Child=art }; Content=new Viewbox { Child=card };
         art.Children.Add(symbol);
         linger.Tick += delegate { linger.Stop(); SlideOut(); };
         for(int i=0;i<5;i++) { var b=new System.Windows.Shapes.Rectangle { Width=4,Height=4,RadiusX=2,RadiusY=2,Fill=new SolidColorBrush(Color.FromRgb(27,27,29)) }; Canvas.SetLeft(b,20.8+i*7.6); Canvas.SetTop(b,25); art.Children.Add(b); bars.Add(b); }
@@ -83,16 +84,24 @@ public sealed class VoicePill : Window {
         sequence++;
         linger.Stop();
         BeginAnimation(LeftProperty, null);
+        string size = Cfg.PillSize();
+        double scale = size == "Small" ? 0.8 : size == "Large" ? 1.5 : 1.0;
+        Width = 76 * scale;
+        Height = 54 * scale;
         var area = SystemParameters.WorkArea;
-        anchor = area.Left + 12;
+        string position = Cfg.PillPosition();
+        bool right = position.EndsWith("right", StringComparison.Ordinal);
+        bool center = position.EndsWith("center", StringComparison.Ordinal);
+        anchor = center ? area.Left + (area.Width - Width) / 2 : right ? area.Right - Width - 12 : area.Left + 12;
+        offset = center ? 0 : right ? Width + 16 : -Width - 16;
         Left = anchor;
-        Top = area.Top + area.Height * 0.55 - Height / 2;
+        Top = position.StartsWith("Top") ? area.Top + 12 : position.StartsWith("Bottom") ? area.Bottom - Height - 12 : area.Top + (area.Height - Height) / 2;
         Thinking = false;
         sign.Visibility = Visibility.Collapsed;
         symbol.Children.Clear();
         foreach (var bar in bars) bar.Visibility = Visibility.Visible;
         Show();
-        BeginAnimation(LeftProperty, new DoubleAnimation(anchor - 96, anchor, TimeSpan.FromMilliseconds(380)) {
+        BeginAnimation(LeftProperty, new DoubleAnimation(anchor + offset, anchor, TimeSpan.FromMilliseconds(145)) {
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
         });
         clock.Restart();
@@ -106,7 +115,7 @@ public sealed class VoicePill : Window {
             double distance = Math.Abs(head - i);
             double level = Thinking ? 0.75 * Math.Max(0, 1 - Math.Min(distance, 5 - distance)) : levels[i];
             bars[i].Height = 4 + 26 * level;
-            Canvas.SetTop(bars[i], (Height - bars[i].Height) / 2);
+            Canvas.SetTop(bars[i], (54 - bars[i].Height) / 2);
         }
     }
     void Dot(double x, double y, double radius) {
@@ -115,10 +124,14 @@ public sealed class VoicePill : Window {
         Canvas.SetTop(dot, y - radius);
         symbol.Children.Add(dot);
     }
-    public void Done(bool ok) {
+    public void Done(bool ok, string message = null) {
         StopFrames();
         foreach (var bar in bars) bar.Visibility = Visibility.Collapsed;
-        if (ok) {
+        if (message != null) {
+            sign.Text = message;
+            Canvas.SetTop(sign, 19);
+            sign.Visibility = Visibility.Visible;
+        } else if (ok) {
             int index = random.Next(2) == 0 ? -1 : random.Next(endings.Length + 5);
             int glyph = index - endings.Length;
             sign.Text = index < 0 ? "Done." : glyph < 0 ? endings[index] : glyph == 4 ? "Carl Pei" : "";
@@ -138,7 +151,7 @@ public sealed class VoicePill : Window {
     }
     void SlideOut() {
         int current = sequence;
-        var exit = new DoubleAnimation(anchor, anchor - 96, TimeSpan.FromMilliseconds(260)) {
+        var exit = new DoubleAnimation(anchor, anchor + offset, TimeSpan.FromMilliseconds(260)) {
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn }
         };
         exit.Completed += delegate { if (sequence == current) Hide(); };
@@ -147,39 +160,147 @@ public sealed class VoicePill : Window {
     public void StopFrames(){if(animated)CompositionTarget.Rendering-=Frame;animated=false;clock.Stop();}
     public void Dismiss(){sequence++;linger.Stop();StopFrames();Hide();}
 }
+// Load the model during the hold. The local CLI reads one WAV from stdin and exits.
+public sealed class SpeechDecoder : IDisposable {
+    readonly Process process;
+    readonly string output = Path.Combine(Path.GetTempPath(), "essential-" + Guid.NewGuid().ToString("N"));
+    public SpeechDecoder(string model) {
+        string engine = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "voice", "whisper-cli.exe");
+        if (!File.Exists(engine) || !File.Exists(model))
+            throw new FileNotFoundException("Check the dictation engine and the Whisper model in Settings.");
+        string arguments = "-m \"" + model + "\" -f - -of \"" + output + "\" -otxt -nt -np -ng -sns -bs 1 -bo 1 -l en -t " +
+            Math.Max(1, Math.Min(4, Environment.ProcessorCount / 2));
+        process = Process.Start(new ProcessStartInfo(engine, arguments) {
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true,
+            RedirectStandardOutput = true, RedirectStandardError = true
+        });
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+    }
+    public string Decode(byte[] pcm) {
+        using (var timeout = new System.Threading.Timer(delegate { Stop(); }, null, 90000, System.Threading.Timeout.Infinite)) {
+            Microphone.WriteWave(process.StandardInput.BaseStream, pcm);
+            process.WaitForExit();
+        }
+        if (process.ExitCode != 0 || !File.Exists(output + ".txt"))
+            throw new IOException("Whisper could not finish dictation. Check your selected model or try a shorter recording.");
+        return File.ReadAllText(output + ".txt").Trim();
+    }
+    public void Stop() {
+        try { if (!process.HasExited) process.Kill(); } catch (InvalidOperationException) { }
+    }
+    public void Dispose() {
+        Stop();
+        process.WaitForExit();
+        process.Dispose();
+        try { File.Delete(output + ".txt"); } catch (IOException) { }
+    }
+}
+
 public sealed class VoiceController : IDisposable {
-    readonly Dispatcher ui; readonly Action<string> notify; Microphone mic; VoicePill pill; IntPtr target; bool busy; volatile bool canceled; volatile int generation; Process worker; readonly object workerGate=new object();
+    static readonly Regex command = new Regex(@"^\s*(notes?|tasks?)\b[\s,.:;!?\u2014\u2013-]*",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    readonly Dispatcher ui;
+    readonly Action<string> notify;
+    readonly Action<bool> refreshed;
     readonly DispatcherTimer limit;
-    public bool Active { get { return mic!=null || busy; } }
-    public VoiceController(Dispatcher d,Action<string> n) { ui=d;notify=n;limit=new DispatcherTimer {Interval=TimeSpan.FromSeconds(90)};limit.Tick+=delegate{End();}; }
+    Microphone mic;
+    VoicePill pill;
+    SpeechDecoder decoder;
+    IntPtr target;
+    int generation;
+    bool decoding;
+    bool? nextTask;
+    DateTime pendingUntil;
+    public bool AwaitingBody { get { return nextTask.HasValue && DateTime.UtcNow < pendingUntil; } }
+    public bool Active { get { return mic != null || decoding; } }
+    public VoiceController(Dispatcher dispatcher, Action<string> notice, Action<bool> refresh) {
+        ui = dispatcher;
+        notify = notice;
+        refreshed = refresh;
+        limit = new DispatcherTimer { Interval = TimeSpan.FromSeconds(90) };
+        limit.Tick += delegate { End(); };
+    }
     public void Begin() {
-        if(Active)return;
-        try { string engine=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"voice","whisper-cli.exe");if(!File.Exists(engine)||!File.Exists(Cfg.ModelPath()))throw new InvalidOperationException("The dictation engine or selected model is missing. Check the Whisper model in Settings.");
-            canceled=false;target=N.GetForegroundWindow();mic=new Microphone(); if(pill==null)pill=new VoicePill();pill.ReadLevels=delegate(float[] values){if(mic!=null)mic.CopyLevels(values);};pill.Listen();limit.Start();
-        } catch(Exception ex){if(mic!=null){mic.Dispose();mic=null;}notify(ex.Message);}
+        if (Active) return;
+        if (!AwaitingBody) nextTask = null;
+        try {
+            target = N.GetForegroundWindow();
+            mic = new Microphone();
+            if (pill == null) pill = new VoicePill();
+            pill.ReadLevels = delegate(float[] values) { if (mic != null) mic.CopyLevels(values); };
+            pill.Listen();
+            decoder = new SpeechDecoder(Cfg.ModelPath());
+            limit.Start();
+        } catch (Exception ex) { Cancel(); notify(ex.Message); }
     }
     public void End() {
-        limit.Stop();if(mic==null)return;
-        byte[] data=mic.Finish();double peak=mic.Peak;mic.Dispose();mic=null;
-        if(data.Length<8000||peak<0.003){pill.Done(false);return;}
-        busy=true;int run=++generation; pill.StartThinking();
+        limit.Stop();
+        if (mic == null) return;
+        byte[] data = mic.Finish();
+        double peak = mic.Peak;
+        mic.Dispose();
+        mic = null;
+        if (data.Length < 8000 || peak < 0.003) {
+            decoder.Dispose(); decoder = null; pill.Done(false); return;
+        }
+        decoding = true;
+        int run = ++generation;
+        SpeechDecoder session = decoder;
+        pill.StartThinking();
         System.Threading.ThreadPool.QueueUserWorkItem(delegate {
-            string path=Path.Combine(Path.GetTempPath(),"essential-"+Guid.NewGuid().ToString("N")+".wav");string text="",error=null;
-            try { Microphone.SaveWave(path,data);text=Transcribe(path,delegate(Process p){lock(workerGate){if(canceled||run!=generation){try{p.Kill();}catch{}}else worker=p;}}); }catch(Exception ex){error=ex.Message;} finally {try{File.Delete(path);File.Delete(path+".txt");}catch{}}
-            ui.BeginInvoke(new Action(delegate {if(run!=generation)return;busy=false;worker=null;if(canceled){pill.Dismiss();return;}if(error!=null){pill.Done(false);notify(error);return;}if(string.IsNullOrWhiteSpace(text)){pill.Done(false);return;}
-                if(N.GetForegroundWindow()!=target){pill.Done(false);notify("Dictation canceled because focus changed. Hold the key again in the destination field.");return;}
-                bool sent=TypeText(text);pill.Done(sent);if(!sent)notify("Could not insert dictation into this app. Try a normal, non-administrator text field.");
+            string text = null, error = null;
+            try { text = session.Decode(data); } catch (Exception ex) { error = ex.Message; }
+            finally { session.Dispose(); }
+            ui.BeginInvoke(new Action(delegate {
+                if (run != generation) return;
+                decoder = null; decoding = false;
+                if (error != null) { pill.Done(false); notify(error); return; }
+                if (String.IsNullOrWhiteSpace(text)) { pill.Done(false); return; }
+                string result = StoreCommand(text);
+                if (result != null) { pill.Done(true, result); return; }
+                if (N.GetForegroundWindow() != target) { pill.Done(false); notify("Dictation canceled because focus changed."); return; }
+                bool sent = TypeText(text);
+                pill.Done(sent);
+                if (!sent) notify("Could not insert dictation into this field.");
             }));
         });
     }
-    public static string Transcribe(string path,Action<Process> started) {
-        string dir=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"voice");
-        var psi=new ProcessStartInfo(Path.Combine(dir,"whisper-cli.exe"),"-m \""+Cfg.ModelPath()+"\" -f \""+path+"\" -of \""+path+"\" -otxt -nt -np -ng -sns -l en -t "+Math.Max(1,Math.Min(4,Environment.ProcessorCount/2))) {UseShellExecute=false,CreateNoWindow=true,RedirectStandardError=true,RedirectStandardOutput=true};
-        using(var p=Process.Start(psi)){ if(started!=null)started(p);p.BeginErrorReadLine();p.BeginOutputReadLine();try{p.PriorityClass=ProcessPriorityClass.BelowNormal;}catch{}if(!p.WaitForExit(90000)){p.Kill();p.WaitForExit();throw new InvalidOperationException("Dictation timed out. Try a shorter recording.");}p.WaitForExit();if(p.ExitCode!=0)throw new InvalidOperationException("Local transcription failed. Check the dictation files."); }
-        return File.Exists(path+".txt")?File.ReadAllText(path+".txt").Trim():"";
+    internal string StoreCommand(string text) {
+        Match match = command.Match(text);
+        bool task;
+        if (match.Success) {
+            task = Char.ToLowerInvariant(match.Groups[1].Value[0]) == 't';
+            text = text.Substring(match.Length).Trim();
+        } else if (nextTask.HasValue) {
+            task = nextTask.Value;
+        } else { return null; }
+        if (text.Length == 0) {
+            nextTask = task;
+            pendingUntil = DateTime.UtcNow.AddSeconds(30);
+            notify("Hold the shortcut again to dictate your " + (task ? "task" : "note") + ". Escape cancels.");
+            return task ? "Say task" : "Say note";
+        }
+        nextTask = null;
+        bool saved;
+        if (task) Todo.Add(text, out saved); else Notes.Add(text, out saved);
+        refreshed(task);
+        if (!saved) { notify("The item is in the launcher, but writing it to disk failed."); return "Unsaved"; }
+        return task ? "Task saved" : "Note saved";
     }
     public static bool TypeText(string text) { var inputs=new List<N.INPUT>();foreach(char c in text){var down=new N.INPUT();down.type=1;down.u.ki.wScan=c;down.u.ki.dwFlags=4;inputs.Add(down);var up=down;up.u.ki.dwFlags=6;inputs.Add(up);}return N.SendInput((uint)inputs.Count,inputs.ToArray(),Marshal.SizeOf(typeof(N.INPUT)))==inputs.Count; }
-    public void Cancel(){limit.Stop();canceled=true;generation++;if(mic!=null){mic.Dispose();mic=null;}lock(workerGate){try{if(worker!=null&&!worker.HasExited)worker.Kill();}catch{}worker=null;}busy=false;if(pill!=null)pill.Dismiss();}
-    public void Dispose(){Cancel();if(pill!=null)pill.Close();}
+    public void Cancel() {
+        limit.Stop();
+        nextTask = null;
+        generation++;
+        if (mic != null) { mic.Dispose(); mic = null; }
+        if (decoder != null) {
+            if (decoding) decoder.Stop(); else decoder.Dispose();
+            decoder = null;
+        }
+        decoding = false;
+        if (pill != null) pill.Dismiss();
+    }
+    public void Dispose() { Cancel(); if (pill != null) pill.Close(); }
 }
 }

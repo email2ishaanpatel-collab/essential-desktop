@@ -325,8 +325,8 @@ namespace SuperDeck
             b.Append("]\n");
             string tmp = path + ".tmp";
             File.WriteAllText(tmp, b.ToString(), new UTF8Encoding(false));
-            if (File.Exists(path)) File.Delete(path);
-            File.Move(tmp, path);
+            if (File.Exists(path)) File.Replace(tmp, path, null);
+            else File.Move(tmp, path);
         }
 
         public static string Get(Dictionary<string, string> d, string k, string dflt)
@@ -965,7 +965,7 @@ namespace SuperDeck
         }
 
 
-        public static void Save()
+        public static bool Save()
         {
             List<Dictionary<string, string>> rows = new List<Dictionary<string, string>>();
             foreach (Note n in Items)
@@ -975,10 +975,12 @@ namespace SuperDeck
                 d["when"] = n.When.ToString(CultureInfo.InvariantCulture);
                 rows.Add(d);
             }
-            try { J.Write(Store, rows); } catch { }
+            try { J.Write(Store, rows); return true; } catch { return false; }
         }
 
-        public static Note Add(string text)
+        public static Note Add(string text) { bool saved; return Add(text, out saved); }
+
+        public static Note Add(string text, out bool saved)
         {
             Note n = new Note();
             n.Id = Guid.NewGuid().ToString("N");
@@ -987,7 +989,7 @@ namespace SuperDeck
             Items.Insert(0, n);
             while (Items.Count > P.MAX_NOTES) Items.RemoveAt(Items.Count - 1);
             Revision++;
-            Save();
+            saved = Save();
             return n;
         }
 
@@ -1073,7 +1075,7 @@ namespace SuperDeck
         }
 
 
-        public static void Save()
+        public static bool Save()
         {
             List<Dictionary<string, string>> rows = new List<Dictionary<string, string>>();
             foreach (Job t in Items)
@@ -1084,7 +1086,7 @@ namespace SuperDeck
                 d["ord"] = t.Ord.ToString(CultureInfo.InvariantCulture);
                 rows.Add(d);
             }
-            try { J.Write(Store, rows); } catch { }
+            try { J.Write(Store, rows); return true; } catch { return false; }
         }
 
         public static int Revision;
@@ -1153,7 +1155,9 @@ namespace SuperDeck
             return n;
         }
 
-        public static Job Add(string text)
+        public static Job Add(string text) { bool saved; return Add(text, out saved); }
+
+        public static Job Add(string text, out bool saved)
         {
             Job t = new Job();
             t.Id = Guid.NewGuid().ToString("N");
@@ -1164,7 +1168,7 @@ namespace SuperDeck
             Items.Insert(0, t);
             Sort();
             Revision++;
-            Save();
+            saved = Save();
             return t;
         }
 
@@ -1245,6 +1249,11 @@ namespace SuperDeck
                 ? Path.GetFileName(path) : path;
             Write();
         }
+
+        public static string PillSize() { return J.Get(All(), "voice.size", "Standard"); }
+        public static string PillPosition() { return J.Get(All(), "voice.position", "Middle left"); }
+        public static void SetPillSize(string value) { All()["voice.size"] = value; Write(); }
+        public static void SetPillPosition(string value) { All()["voice.position"] = value; Write(); }
 
         public static string Trigger() { return J.Get(All(), "trigger", "Windows / Super"); }
         public static void SetTrigger(string value) { All()["trigger"]=value; Write(); }
@@ -3048,7 +3057,7 @@ namespace SuperDeck
         const double CARD_R = 26;
         const double PAD_X = 26;
         const double PAD_Y = 22;
-        const double ROW_H = 58;
+        const double ROW_H = 50;
         const double FEAT_H = 46;
         const double FEAT_GAP = 6;
         const double ROW_R = 16;
@@ -3103,6 +3112,16 @@ namespace SuperDeck
             var modelControls = new StackPanel { Orientation = Orientation.Horizontal };
             modelControls.Children.Add(ModelPicker());
             body.Children.Add(Row("Whisper model", modelControls));
+            var sizes = new[] { "Small", "Standard", "Large" };
+            body.Children.Add(Row("Voice pill size", Segmented(sizes, sizes, Cfg.PillSize, Cfg.SetPillSize)));
+            var positions = new ComboBox { MinWidth = 150, Height = 32, VerticalContentAlignment = VerticalAlignment.Center };
+            positions.ItemsSource = new[] { "Top left", "Top center", "Top right", "Middle left", "Middle center",
+                "Middle right", "Bottom left", "Bottom center", "Bottom right" };
+            positions.SelectedItem = Cfg.PillPosition();
+            positions.SelectionChanged += delegate {
+                if (positions.SelectedItem != null) Cfg.SetPillPosition((string)positions.SelectedItem);
+            };
+            body.Children.Add(Row("Voice pill position", positions));
             body.Children.Add(Head("FEATURES", FEAT_H - 16));
 
             /* The order here is the order they sit on screen: notes on the left, the
@@ -4039,6 +4058,11 @@ namespace SuperDeck
             };
             timer.Start();
         }
+        public void RefreshVoiceItem(bool task)
+        {
+            if (task) todoPanel.Rebuild(); else notesPanel.Rebuild();
+        }
+
         public bool IsOpen { get { return open; } }
 
         public void Open_()
@@ -4249,7 +4273,7 @@ namespace SuperDeck
                 var k=(N.KBDLL)Marshal.PtrToStructure(l,typeof(N.KBDLL));
                 if((k.flags&0x10)==0) {
                     int vk=(int)k.vkCode,msg=(int)w;bool down=msg==0x100||msg==0x104,up=msg==0x101||msg==0x105;
-                    if(vk==0x1b&&down&&voice.Active){ResetGesture();return (IntPtr)1;}
+                    if(vk==0x1b&&down&&(voice.Active || voice.AwaitingBody)){ResetGesture();return (IntPtr)1;}
                     if((keyDown&&vk==pressedKey)||(down&&!keyDown&&Trigger(vk)&&!Kb.IsDown(Kb.CTRL)&&!Kb.IsDown(Kb.ALT)&&!Kb.IsDown(Kb.SHIFT))) {
                         if(down&&!keyDown){keyDown=true;pressedKey=vk;usedChord=false;holding=false;BeginPress();}
                         if(up&&keyDown){keyDown=false;if(holdTimer!=null)holdTimer.Stop();if(holding){holding=false;Post(voice.End);}else if(!usedChord)Post(Toggle);}
@@ -4461,7 +4485,7 @@ namespace SuperDeck
             Notes.Load();
             Todo.Load();
 
-            voice = new VoiceController(disp, Notify);
+            voice = new VoiceController(disp, Notify, delegate(bool task) { if (launcher.IsOpen) launcher.RefreshVoiceItem(task); });
             launcher = new Launcher();
             UpdateClipboardListener();
             Cfg.FeatureChanged += UpdateClipboardListener;
