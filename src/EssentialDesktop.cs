@@ -177,20 +177,30 @@ namespace SuperDeck
         public static Pal C { get { return cur; } }
         public static event Action Restyle;
 
+        public static void WhenLoaded(FrameworkElement owner, Action paint)
+        {
+            owner.Loaded += delegate { Restyle += paint; paint(); };
+            owner.Unloaded += delegate { Restyle -= paint; };
+        }
+
         public static void SetPalette(string name)
         {
             cur = (name == "light") ? LIGHT : DARK;
             if (Restyle != null) Restyle();
         }
 
+        static readonly Dictionary<Color, SolidColorBrush> brushes = new Dictionary<Color, SolidColorBrush>();
         public static SolidColorBrush Br(Color c)
         {
-            SolidColorBrush b = new SolidColorBrush(c);
+            SolidColorBrush b;
+            if (brushes.TryGetValue(c, out b)) return b;
+            b = new SolidColorBrush(c);
             b.Freeze();
+            brushes[c] = b;
             return b;
         }
 
-        public static FontFamily Face { get { return new FontFamily(FONT_FAMILY); } }
+        public static readonly FontFamily Face = new FontFamily(FONT_FAMILY);
 
         public static string ConfigDir
         {
@@ -720,9 +730,12 @@ namespace SuperDeck
                 DR.Icon ico = e.IsDir ? Shell.FolderIcon() : DR.Icon.ExtractAssociatedIcon(e.Path);
                 if (ico != null)
                 {
-                    src = Imaging.CreateBitmapSourceFromHIcon(
-                        ico.Handle, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
-                    src.Freeze();
+                    using (DR.Icon owned = e.IsDir ? null : ico)
+                    {
+                        src = Imaging.CreateBitmapSourceFromHIcon(
+                            ico.Handle, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
+                        src.Freeze();
+                    }
                 }
             }
             catch { }
@@ -1340,70 +1353,17 @@ namespace SuperDeck
         /* A Segoe MDL2 Assets glyph, which every Windows 10 and 11 has. The icon
          * theme Linux draws these from is not here, and a drawn set of six would be
          * six marks to keep in step with nothing. */
+        static readonly FontFamily IconFace = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets");
         public static TextBlock Glyph(string ch, double size)
         {
             TextBlock t = new TextBlock();
             t.Text = ch;
-            t.FontFamily = new FontFamily("Segoe MDL2 Assets");
+            t.FontFamily = IconFace;
             t.FontSize = size;
             t.Foreground = P.Br(P.C.INK_DIM);
             t.VerticalAlignment = VerticalAlignment.Center;
-            P.Restyle += delegate { t.Foreground = P.Br(P.C.INK_DIM); };
+            P.WhenLoaded(t, delegate { t.Foreground = P.Br(P.C.INK_DIM); });
             return t;
-        }
-
-        /* The Gemini spark, four points on the diagonals - spark.js's mark. */
-        public static FrameworkElement Spark(double size)
-        {
-            Shapes.Path p = new Shapes.Path();
-            double r = size / 2, w = size * 0.17;
-            StreamGeometry g = new StreamGeometry();
-            using (StreamGeometryContext c = g.Open())
-            {
-                c.BeginFigure(new Point(r, 0), true, true);
-                c.LineTo(new Point(r + w, r - w), true, true);
-                c.LineTo(new Point(size, r), true, true);
-                c.LineTo(new Point(r + w, r + w), true, true);
-                c.LineTo(new Point(r, size), true, true);
-                c.LineTo(new Point(r - w, r + w), true, true);
-                c.LineTo(new Point(0, r), true, true);
-                c.LineTo(new Point(r - w, r - w), true, true);
-            }
-            g.Freeze();
-            p.Data = g;
-            p.Fill = P.Br(P.C.INK_DIM);
-            p.Width = size; p.Height = size;
-            P.Restyle += delegate { p.Fill = P.Br(P.C.INK_DIM); };
-            return p;
-        }
-
-        /* The circle a hand draws round something, with the overshoot where it comes
-         * back past where it started - what the Circle to Search gesture looks like,
-         * and the reason it is not a magnifier with a box round it. */
-        public static FrameworkElement LensGlyph(double size)
-        {
-            Shapes.Path p = new Shapes.Path();
-            double r = size / 2 - 1.2;
-            StreamGeometry g = new StreamGeometry();
-            using (StreamGeometryContext c = g.Open())
-            {
-                Point start = new Point(size / 2 + r * Math.Cos(-0.5), size / 2 + r * Math.Sin(-0.5));
-                c.BeginFigure(start, false, false);
-                for (double a = -0.5; a <= 2 * Math.PI + 0.7; a += 0.2)
-                {
-                    double rr = r * (1 + (a > 2 * Math.PI ? 0.10 : 0));
-                    c.LineTo(new Point(size / 2 + rr * Math.Cos(a), size / 2 + rr * Math.Sin(a)), true, true);
-                }
-            }
-            g.Freeze();
-            p.Data = g;
-            p.Stroke = P.Br(P.C.INK_DIM);
-            p.StrokeThickness = 2;
-            p.StrokeStartLineCap = PenLineCap.Round;
-            p.StrokeEndLineCap = PenLineCap.Round;
-            p.Width = size; p.Height = size;
-            P.Restyle += delegate { p.Stroke = P.Br(P.C.INK_DIM); };
-            return p;
         }
 
         public static void SetCaption(StackPanel host, string text)
@@ -1416,35 +1376,33 @@ namespace SuperDeck
          * kind of object, and in here the fields genuinely are pills - the search
          * bar is one and the add-a-task bar mirrors it. Giving the buttons a
          * corner instead is what separates "type into me" from "press me". */
-        public static Border Button(string text, Action click)
+        public static Border Button(string text, Action click, bool destructive = false)
         {
             Border b = new Border();
             b.Height = P.BTN_H;
             b.CornerRadius = new CornerRadius(P.BTN_R);
             b.Padding = new Thickness(13, 0, 13, 0);
             b.Margin = new Thickness(8, 0, 0, 0);
-            b.Background = P.Br(P.C.BTN_BG);
+            b.Background = P.Br(destructive ? P.BIN_RED : P.C.BTN_BG);
             b.Cursor = Cursors.Hand;
 
-            StackPanel inner = Tracked(text, P.FONT_BTN, P.C.INK_BODY, 0.45, true);
+            StackPanel inner = Tracked(text, P.FONT_BTN, destructive ? Colors.White : P.C.INK_BODY, 0.45, true);
             inner.VerticalAlignment = VerticalAlignment.Center;
             b.Child = inner;
 
             /* Hover changes the colour and nothing else - the button does not move. */
-            b.MouseEnter += delegate { b.Background = P.Br(P.C.BTN_BG_HOVER); };
-            b.MouseLeave += delegate { b.Background = P.Br(P.C.BTN_BG); };
+            b.MouseEnter += delegate { b.Background = P.Br(destructive ? P.BIN_RED : P.C.BTN_BG_HOVER); };
+            b.MouseLeave += delegate { b.Background = P.Br(destructive ? P.BIN_RED : P.C.BTN_BG); };
             b.MouseLeftButtonUp += delegate(object s, MouseButtonEventArgs e)
             {
                 e.Handled = true;
                 if (click != null) click();
             };
-            P.Restyle += delegate
+            P.WhenLoaded(b, delegate
             {
-                b.Background = P.Br(b.IsMouseOver ? P.C.BTN_BG_HOVER : P.C.BTN_BG);
-                StackPanel again = Tracked(text, P.FONT_BTN, P.C.INK_BODY, 0.45, true);
-                again.VerticalAlignment = VerticalAlignment.Center;
-                b.Child = again;
-            };
+                b.Background = P.Br(destructive ? P.BIN_RED : (b.IsMouseOver ? P.C.BTN_BG_HOVER : P.C.BTN_BG));
+                foreach (TextBlock letter in inner.Children) letter.Foreground = P.Br(destructive ? Colors.White : P.C.INK_BODY);
+            });
             return b;
         }
 
@@ -1466,11 +1424,11 @@ namespace SuperDeck
             g.VerticalAlignment = VerticalAlignment.Center;
             g.Foreground = P.Br(P.C.INK_BODY);
             b.Child = g;
-            P.Restyle += delegate
+            P.WhenLoaded(b, delegate
             {
                 b.Background = P.Br(b.IsMouseOver ? P.C.BTN_BG_HOVER : P.C.BTN_BG);
                 g.Foreground = P.Br(P.C.INK_BODY);
-            };
+            });
             /* Hover changes the colour and nothing else - the button does not move. */
             b.MouseEnter += delegate { b.Background = P.Br(P.C.BTN_BG_HOVER); };
             b.MouseLeave += delegate { b.Background = P.Br(P.C.BTN_BG); };
@@ -1489,7 +1447,8 @@ namespace SuperDeck
         {
             Border b = new Border();
             b.Width = P.BIN; b.Height = P.BIN;
-            b.CornerRadius = new CornerRadius(P.BIN / 2);
+            b.CornerRadius = new CornerRadius(P.BTN_R);
+            b.ToolTip = "Delete";
             b.Background = P.Br(P.C.BTN_BG);
             b.Cursor = Cursors.Hand;
             TextBlock g = Glyph("", 14);
@@ -1504,7 +1463,7 @@ namespace SuperDeck
                 g.Foreground = P.Br(hot ? Colors.White : P.C.INK_BODY);
             };
             paint();
-            P.Restyle += delegate { paint(); };
+            P.WhenLoaded(b, delegate { paint(); });
             b.MouseEnter += delegate { paint(); };
             b.MouseLeave += delegate { paint(); };
             /* Swallowed at the press as well, so nothing underneath ever sees the
@@ -1535,7 +1494,8 @@ namespace SuperDeck
             Grid stack = new Grid();
             host.Child = stack;
 
-            Border bin = Bin(null);
+            Action<bool> arm = null;
+            Border bin = Bin(delegate { arm(true); });
             stack.Children.Add(bin);
 
             /* Opaque, on the panel's own ground: in a header it is over nothing and
@@ -1548,7 +1508,7 @@ namespace SuperDeck
             ask.Padding = new Thickness(4);
             ask.Visibility = Visibility.Collapsed;
             ask.RenderTransformOrigin = new Point(1, 0.5);
-            P.Restyle += delegate { ask.Background = P.Br(P.C.BODY); };
+            P.WhenLoaded(ask, delegate { ask.Background = P.Br(P.C.BODY); });
             StackPanel pair = new StackPanel();
             pair.Orientation = Orientation.Horizontal;
             ask.Child = pair;
@@ -1557,7 +1517,6 @@ namespace SuperDeck
             ScaleTransform grow = new ScaleTransform(1, 1);
             ask.RenderTransform = grow;
 
-            Action<bool> arm = null;
             arm = delegate(bool on)
             {
                 if (on)
@@ -1579,12 +1538,6 @@ namespace SuperDeck
             };
             host.Tag = arm;
 
-            bin.MouseLeftButtonUp += delegate(object s, MouseButtonEventArgs e)
-            {
-                e.Handled = true;
-                arm(true);
-            };
-
             Border no = Button("NO", delegate { arm(false); });
             no.Margin = new Thickness(0);
             pair.Children.Add(no);
@@ -1592,21 +1545,7 @@ namespace SuperDeck
             {
                 arm(false);
                 if (onYes != null) onYes();
-            });
-            yes.Background = P.Br(P.BIN_RED);
-            /* It keeps its red through a theme change: it is the bins' own colour, not
-             * a palette entry that means "red". */
-            P.Restyle += delegate { yes.Background = P.Br(P.BIN_RED); };
-            TextBlock yesInk = null;
-            if (yes.Child is StackPanel)
-            {
-                StackPanel sp = (StackPanel)yes.Child;
-                foreach (UIElement el in sp.Children)
-                {
-                    yesInk = el as TextBlock;
-                    if (yesInk != null) yesInk.Foreground = P.Br(Colors.White);
-                }
-            }
+            }, true);
             pair.Children.Add(yes);
 
             /* Reaching for the bin is not the start of a drag, and the card underneath
@@ -1741,6 +1680,7 @@ namespace SuperDeck
         StackPanel caption;
         double contentW, cardW;
         Clip selected;
+        bool dirty = true;
 
         public DeckPanel()
         {
@@ -1762,17 +1702,29 @@ namespace SuperDeck
             body.Children.Add(sv);
 
             Root.Child = body;
-            Deck.Changed += delegate { if (Root.IsVisible) Rebuild(); };
-            P.Restyle += Rebuild;
-            Rebuild();
+            Deck.Changed += Invalidate;
+            P.Restyle += Invalidate;
+        }
+
+        void Invalidate()
+        {
+            dirty = true;
+            if (Root.IsVisible && Root.ActualHeight > 0) Rebuild();
         }
 
         public double Height() { return P.DECK_H; }
 
         public void Rebuild()
         {
+            if (!dirty) return;
+            dirty = false;
             Ui.SetCaption(caption, Deck.Count > 0 ? "COPY DECK - " + Deck.Count : "COPY DECK");
             wall.Children.Clear();
+            if (Deck.Count == 0)
+            {
+                var empty = Ui.Label("Copied text and images will appear here.", P.FONT_BODY, P.C.INK_DIM, false);
+                wall.Children.Add(empty);
+            }
 
             /* Masonry: each card goes to whichever column is currently shortest,
              * which is what keeps the wall's bottom edge from being a staircase. */
@@ -1879,24 +1831,11 @@ namespace SuperDeck
             }
 
             /* The delete button in the card's top corner, on hover. */
-            Border bin = new Border();
-            bin.Width = P.BIN; bin.Height = P.BIN;
-            bin.CornerRadius = new CornerRadius(P.BIN / 2);
-            bin.Background = P.Br(Color.FromArgb(190, 0, 0, 0));
+            Border bin = Ui.Bin(delegate { Deck.Remove(c); });
             bin.HorizontalAlignment = HorizontalAlignment.Right;
             bin.VerticalAlignment = VerticalAlignment.Top;
             bin.Margin = new Thickness(0, P.BIN_INSET, P.BIN_INSET, 0);
             bin.Visibility = Visibility.Collapsed;
-            bin.Cursor = Cursors.Hand;
-            TextBlock x = Ui.Label("\u00d7", 15, Color.FromArgb(230, 255, 255, 255), false);
-            x.HorizontalAlignment = HorizontalAlignment.Center;
-            x.VerticalAlignment = VerticalAlignment.Center;
-            bin.Child = x;
-            bin.MouseLeftButtonUp += delegate(object s, MouseButtonEventArgs e)
-            {
-                e.Handled = true;
-                Deck.Remove(c);
-            };
             host.Children.Add(bin);
 
             host.MouseEnter += delegate
@@ -2161,7 +2100,7 @@ namespace SuperDeck
         TextBox sheet;
         Border sheetCard;
         TextBlock sheetHint, empty;
-        Border noteBin, cardBinHost;
+        Border noteBin;
         Reorder reorder;
         readonly List<Border> cards = new List<Border>();
         double contentW, bodyH;
@@ -2327,6 +2266,8 @@ namespace SuperDeck
             {
                 if (text.Trim().Length == 0) return;
                 item = Notes.Add("");
+                noteBin.Visibility = Visibility.Visible;
+                Ui.SetCaption(noteCaption, "NOTE");
             }
             Notes.SetText(item, text);
         }
@@ -2455,7 +2396,7 @@ namespace SuperDeck
             card.Background = P.Br(P.C.CARD_BG);
             card.ClipToBounds = true;
             card.Cursor = Cursors.Hand;
-            P.Restyle += delegate { card.Background = P.Br(card.IsMouseOver ? P.C.CARD_BG_HOVER : P.C.CARD_BG); };
+            P.WhenLoaded(card, delegate { card.Background = P.Br(card.IsMouseOver ? P.C.CARD_BG_HOVER : P.C.CARD_BG); });
 
             Grid inner = new Grid();
             card.Child = inner;
@@ -2465,7 +2406,7 @@ namespace SuperDeck
             label.Width = w - 2 * P.CARD_BORDER - 2 * TX;
             label.Margin = new Thickness(TX, TY, TX, TY);
             label.VerticalAlignment = VerticalAlignment.Top;
-            P.Restyle += delegate { label.Foreground = P.Br(P.C.INK_BODY); };
+            P.WhenLoaded(label, delegate { label.Foreground = P.Br(P.C.INK_BODY); });
             inner.Children.Add(label);
 
             label.Measure(new Size(label.Width, double.PositiveInfinity));
@@ -2957,7 +2898,7 @@ namespace SuperDeck
                 label.Foreground = P.Br(t.Done ? P.C.INK_DIM : P.C.INK_BODY);
             };
             paint();
-            P.Restyle += delegate { paint(); };
+            P.WhenLoaded(row, delegate { paint(); });
             row.MouseEnter += delegate
             {
                 paint();
@@ -3181,7 +3122,7 @@ namespace SuperDeck
             Border select = null;
             var label = Ui.Label("", 14, P.C.INK_BODY, false);
             Action refresh = delegate {
-                label.Text = Path.GetFileNameWithoutExtension(Cfg.ModelPath()).Replace("ggml-", "") + "   ⌄";
+                label.Text = Path.GetFileNameWithoutExtension(Cfg.ModelPath()).Replace("ggml-", "");
                 label.Foreground = P.Br(P.C.INK_BODY);
             };
             select = Ui.Button("Model", delegate {
@@ -3206,20 +3147,16 @@ namespace SuperDeck
                 menu.PlacementTarget = select;
                 menu.IsOpen = true;
             });
-            select.Child = label;
-            P.Restyle += delegate { select.Child = label; refresh(); };
+            var modelContent = new StackPanel { Orientation = Orientation.Horizontal };
+            label.Margin = new Thickness(0, 0, 7, 0);
+            modelContent.Children.Add(label);
+            modelContent.Children.Add(Ui.Glyph("\uE70D", 12));
+            select.Child = modelContent;
+            P.Restyle += delegate { select.Child = modelContent; refresh(); };
             refresh();
             return select;
         }
 
-        FrameworkElement Unavailable(string text)
-        {
-            var label = Ui.Label(text, 14, P.C.INK_DIM, false);
-            label.VerticalAlignment = VerticalAlignment.Center;
-            var row = new Border { Height = FEAT_H, Padding = new Thickness(16, 0, 16, 0), Child = label };
-            P.Restyle += delegate { label.Foreground = P.Br(P.C.INK_DIM); };
-            return row;
-        }
         FrameworkElement Head(string text, double h)
         {
             Border b = new Border();
@@ -3399,8 +3336,7 @@ namespace SuperDeck
             ColumnDefinition c2 = new ColumnDefinition(); c2.Width = GridLength.Auto;
             g.ColumnDefinitions.Add(c0); g.ColumnDefinitions.Add(c1); g.ColumnDefinitions.Add(c2);
 
-            FrameworkElement mark = glyph == "spark" ? Ui.Spark(18) :
-                                    glyph == "lens" ? Ui.LensGlyph(18) : Ui.Glyph(glyph, 18);
+            FrameworkElement mark = Ui.Glyph(glyph, 18);
             mark.VerticalAlignment = VerticalAlignment.Center;
             mark.Margin = new Thickness(0, 0, 12, 0);
             Grid.SetColumn(mark, 0);
@@ -3536,7 +3472,7 @@ namespace SuperDeck
             WindowStyle = WindowStyle.None;
             AllowsTransparency = true;
             Background = Brushes.Transparent;
-            ShowInTaskbar = Environment.CommandLine.Contains("--review");
+            ShowInTaskbar = true;
             Topmost = true;
             ResizeMode = ResizeMode.NoResize;
 
@@ -3635,7 +3571,7 @@ namespace SuperDeck
             spread.Children.Add(pill);
 
             bar = new Grid();
-            bar.Width = P.W;
+            bar.Width = P.W - 48;
             bar.Height = P.H;
             bar.Margin = new Thickness(24, 0, 24, 0);
             /* Anchored to the pill's left edge: the field is where it will end up
@@ -3649,10 +3585,16 @@ namespace SuperDeck
             bar.ColumnDefinitions.Add(d);
             bar.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
             deckChevron=Ui.IconButton("", delegate { Cfg.SetDeckCollapsed(!Cfg.DeckCollapsed()); Sync(); });
-            deckChevronText=Ui.Glyph("", P.ICON_HEAD);
-            deckChevronText.HorizontalAlignment=HorizontalAlignment.Center;
-            deckChevronText.VerticalAlignment=VerticalAlignment.Center;
-            deckChevron.Child=deckChevronText;
+            var deckControls = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            var deckLabel = Ui.Label("Copy deck", 13, P.C.INK_BODY, false);
+            deckLabel.Margin = new Thickness(0, 0, 7, 0);
+            deckChevronText = Ui.Glyph("", 12);
+            deckControls.Children.Add(deckLabel);
+            deckControls.Children.Add(deckChevronText);
+            deckChevron.Width = Double.NaN;
+            deckChevron.Padding = new Thickness(10, 0, 10, 0);
+            deckChevron.Child = deckControls;
+            P.Restyle += delegate { deckLabel.Foreground = P.Br(P.C.INK_BODY); };
             deckChevron.Margin=new Thickness(8,0,0,0);
             deckChevron.VerticalAlignment=VerticalAlignment.Center;
             Grid.SetColumn(deckChevron,3);bar.Children.Add(deckChevron);
@@ -3871,22 +3813,9 @@ namespace SuperDeck
              * also launch the thing. */
             if (e.IsDir)
             {
-                Border chev = new Border();
-                chev.Width = P.CHEV_SIZE; chev.Height = P.CHEV_SIZE;
-                chev.CornerRadius = new CornerRadius(P.CHEV_SIZE / 2);
-                chev.Background = P.Br(P.C.BTN_BG);
-                chev.VerticalAlignment = VerticalAlignment.Center;
-                TextBlock g = Ui.Label(">", P.CHEV_GLYPH, P.C.INK_BODY, false);
-                g.HorizontalAlignment = HorizontalAlignment.Center;
-                g.VerticalAlignment = VerticalAlignment.Center;
-                chev.Child = g;
                 int n1 = i;
-                chev.MouseLeftButtonUp += delegate(object s, MouseButtonEventArgs ev)
-                {
-                    ev.Handled = true;
-                    Select(n1);
-                    Enter(n1);
-                };
+                Border chev = Ui.IconButton("\uE76C", delegate { Select(n1); Enter(n1); });
+                chev.ToolTip = "Open folder";
                 right.Children.Add(chev);
             }
             row.Children.Add(right);
@@ -3950,8 +3879,8 @@ namespace SuperDeck
             deckChevronText.Text=Cfg.DeckCollapsed()?"\uE70D":"\uE70E";
             deckChevron.ToolTip=Cfg.DeckCollapsed()?"Expand copy deck":"Minimize copy deck";
             bool deckOn = !Cfg.DeckCollapsed() && n == 0 && level == null && Cfg.Feature("deck") &&
-                          entry.Text.Trim().Length == 0 && Deck.Count > 0;
-            if (!deckOn) deckPanel.Unselect();
+                          entry.Text.Trim().Length == 0;
+            if (deckOn) deckPanel.Rebuild(); else deckPanel.Unselect();
 
             DoubleAnimation grow = Ui.Ease(deckOn ? deckPanel.Height() : 0, P.GROW_MS, true);
             /* Let the pill land first when it is arriving from nothing. */
@@ -4114,7 +4043,7 @@ namespace SuperDeck
 
         public void Open_()
         {
-            if (open) return;
+            if (open) { Activate(); Foreground_(); return; }
             if (closeTimer != null) { closeTimer.Stop(); closeTimer = null; }
             open = true;
 
@@ -4130,7 +4059,6 @@ namespace SuperDeck
 
             ResetSettings();
             ApplyFeatures();
-            deckPanel.Rebuild();
             notesPanel.Rebuild();
             todoPanel.Rebuild();
             /* Every appearance gets the whole spin curve from the top. */
@@ -4360,6 +4288,12 @@ namespace SuperDeck
          *
          * A message-only window, because a clipboard listener needs an hwnd and
          * the launcher's own is hidden most of the time. */
+        static void UpdateClipboardListener()
+        {
+            if (!Cfg.Feature("deck")) { StopClipboard(); return; }
+            if (msgWin == null) WatchClipboard();
+        }
+
         static void WatchClipboard()
         {
             HwndSourceParameters ps = new HwndSourceParameters("SuperDeckClipboard");
@@ -4434,14 +4368,14 @@ namespace SuperDeck
         static void BuildTray()
         {
             tray = new WF.NotifyIcon();
-            tray.Icon = DR.SystemIcons.Application;
+            tray.Icon = DR.Icon.ExtractAssociatedIcon(SelfPath);
             tray.Text = "Essential Desktop";
             tray.Visible = true;
 
             WF.ContextMenuStrip menu = new WF.ContextMenuStrip();
 
             WF.ToolStripMenuItem open = new WF.ToolStripMenuItem("Open launcher");
-            open.Click += delegate { Post(Toggle); };
+            open.Click += delegate { Post(delegate { launcher.Open_(); }); };
             menu.Items.Add(open);
 
             WF.ToolStripMenuItem theme = new WF.ToolStripMenuItem("Light / dark");
@@ -4492,15 +4426,20 @@ namespace SuperDeck
             tray.ShowBalloonTip(1200);
         }
 
-        static void Quit()
+        static void StopClipboard()
         {
-            RemoveHook(); voice.Dispose();
             if (msgWin != null)
             {
                 N.RemoveClipboardFormatListener(msgWin.Handle);
                 msgWin.Dispose();
                 msgWin = null;
             }
+        }
+
+        static void Quit()
+        {
+            RemoveHook(); voice.Dispose();
+            StopClipboard();
             if (tray != null) { tray.Visible = false; tray.Dispose(); tray = null; }
             app.Shutdown();
         }
@@ -4524,7 +4463,8 @@ namespace SuperDeck
 
             voice = new VoiceController(disp, Notify);
             launcher = new Launcher();
-            WatchClipboard();
+            UpdateClipboardListener();
+            Cfg.FeatureChanged += UpdateClipboardListener;
             BuildTray();
             InstallHook();
 
@@ -4533,13 +4473,6 @@ namespace SuperDeck
                 RemoveHook();
             };
 
-            /* Warm the index off the message loop, so the first tap of the Super
-             * key is not the one that pays for it. */
-            DispatcherTimer warm = new DispatcherTimer();
-            warm.Interval = TimeSpan.FromMilliseconds(500);
-            warm.Tick += delegate { warm.Stop(); Idx.Apps(); };
-            warm.Start();
-
             Notify("Tap "+Cfg.Trigger()+" to open; hold to dictate.");
             var showSignal = new System.Threading.EventWaitHandle(false, System.Threading.EventResetMode.AutoReset, @"Local\EssentialDesktopShow");
             var requests=System.Threading.ThreadPool.RegisterWaitForSingleObject(showSignal,delegate(object state,bool timedOut){Post(delegate{launcher.Open_();});},null,System.Threading.Timeout.Infinite,false);
@@ -4547,7 +4480,13 @@ namespace SuperDeck
             initial.Interval = TimeSpan.FromMilliseconds(800);
             initial.Tick += delegate { initial.Stop(); launcher.Open_(); if (Environment.CommandLine.Contains("--review")) launcher.Review(); };
             initial.Start();
-            app.Run();
+            using (var shutdown = new System.Threading.EventWaitHandle(false, System.Threading.EventResetMode.AutoReset, @"Local\EssentialDesktopUpdateQuit"))
+            {
+                var quitRequest = System.Threading.ThreadPool.RegisterWaitForSingleObject(shutdown,
+                    delegate { Post(Quit); }, null, System.Threading.Timeout.Infinite, true);
+                app.Run();
+                quitRequest.Unregister(null);
+            }
             requests.Unregister(null); showSignal.Dispose();
             RemoveHook();
         }
@@ -4558,12 +4497,31 @@ public static class EssentialDesktopEntry
     [STAThread]
     public static void Main()
     {
+        string build = @"Local\EssentialDesktopBuild_" + typeof(EssentialDesktopEntry).Module.ModuleVersionId.ToString("N");
+        bool firstForBuild;
+        using (var marker = new System.Threading.EventWaitHandle(false, System.Threading.EventResetMode.ManualReset, build, out firstForBuild))
         using (var mutex = new System.Threading.Mutex(false, @"Local\SuperDeck_SingleInstance_9f21"))
         {
             bool owned;
             try { owned = mutex.WaitOne(0, false); }
             catch (System.Threading.AbandonedMutexException) { owned = true; }
-            if (!owned) { try { System.Threading.EventWaitHandle.OpenExisting(@"Local\EssentialDesktopShow").Set(); } catch { } return; }
+            if (!owned && firstForBuild && System.IO.File.Exists(System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".installed")))
+            {
+                System.Threading.EventWaitHandle stop;
+                if (System.Threading.EventWaitHandle.TryOpenExisting(@"Local\EssentialDesktopUpdateQuit", out stop))
+                {
+                    using (stop) stop.Set();
+                    try { owned = mutex.WaitOne(10000); }
+                    catch (System.Threading.AbandonedMutexException) { owned = true; }
+                }
+            }
+            if (!owned)
+            {
+                System.Threading.EventWaitHandle show;
+                if (System.Threading.EventWaitHandle.TryOpenExisting(@"Local\EssentialDesktopShow", out show))
+                    using (show) show.Set();
+                return;
+            }
             try { SuperDeck.App.Run(); }
             catch (Exception ex)
             {

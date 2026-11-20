@@ -67,10 +67,10 @@ public sealed class VoicePill : Window {
     int sequence;
     double anchor;
 
-    readonly TranslateTransform slide=new TranslateTransform();
+
     public VoicePill() {
         Width=76;Height=54;WindowStyle=WindowStyle.None;AllowsTransparency=true;Background=Brushes.Transparent;ShowInTaskbar=false;ShowActivated=false;Topmost=true;ResizeMode=ResizeMode.NoResize;
-        var card=new Border { CornerRadius=new CornerRadius(27),Background=new SolidColorBrush(Color.FromRgb(255,217,0)),Child=art,RenderTransform=slide }; Content=card;
+        var card=new Border { CornerRadius=new CornerRadius(27),Background=new SolidColorBrush(Color.FromRgb(255,217,0)),Child=art }; Content=card;
         art.Children.Add(symbol);
         linger.Tick += delegate { linger.Stop(); SlideOut(); };
         for(int i=0;i<5;i++) { var b=new System.Windows.Shapes.Rectangle { Width=4,Height=4,RadiusX=2,RadiusY=2,Fill=new SolidColorBrush(Color.FromRgb(27,27,29)) }; Canvas.SetLeft(b,20.8+i*7.6); Canvas.SetTop(b,25); art.Children.Add(b); bars.Add(b); }
@@ -162,7 +162,7 @@ public sealed class VoiceController : IDisposable {
         limit.Stop();if(mic==null)return;
         byte[] data=mic.Finish();double peak=mic.Peak;mic.Dispose();mic=null;
         if(data.Length<8000||peak<0.003){pill.Done(false);return;}
-        busy=true;int run=++generation; if(pill!=null)pill.StartThinking();
+        busy=true;int run=++generation; pill.StartThinking();
         System.Threading.ThreadPool.QueueUserWorkItem(delegate {
             string path=Path.Combine(Path.GetTempPath(),"essential-"+Guid.NewGuid().ToString("N")+".wav");string text="",error=null;
             try { Microphone.SaveWave(path,data);text=Transcribe(path,delegate(Process p){lock(workerGate){if(canceled||run!=generation){try{p.Kill();}catch{}}else worker=p;}}); }catch(Exception ex){error=ex.Message;} finally {try{File.Delete(path);File.Delete(path+".txt");}catch{}}

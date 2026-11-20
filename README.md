@@ -12,7 +12,7 @@ Use Windows PowerShell on Windows 11 with .NET Framework 4.x.
 .\dist\EssentialDesktop.exe
 ```
 
-The build writes the application to `dist` by default. To build directly into an installed folder, put its absolute path in a local `.build-output` file at the project root. Rebuild after changing the source and reopen the application. Quit the running copy from its tray menu before rebuilding. Shortcuts should point to that same executable.
+The build writes the application to `dist` by default. To build directly into an installed folder, put its absolute path in a local `.build-output` file at the project root. For an installed build, run `Build.ps1` after editing. It closes a running updatable instance, replaces the executable and opens the new version. Use `-OutputDirectory` for a separate test build. Desktop, Start menu and sign-in shortcuts should target the installed executable.
 
 ## Settings
 
