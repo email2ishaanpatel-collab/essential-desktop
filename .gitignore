@@ -1,0 +1,16 @@
+dist/
+voice/
+review/
+*.exe
+*.dll
+*.pdb
+*.wav
+*.bin
+*.zip
+*.log
+config.json
+notes*.json
+todo*.json
+copydeck.json
+settings.json
+clips/
