@@ -14,3 +14,4 @@ todo*.json
 copydeck.json
 settings.json
 clips/
+.build-output
